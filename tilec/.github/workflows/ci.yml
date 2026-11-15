@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: clang-release
+            cxx: clang++-18
+            build_type: Release
+            sanitize: "OFF"
+          - name: gcc-asan-ubsan
+            cxx: g++
+            build_type: Debug
+            sanitize: "ON"
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18 ninja-build cmake
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          pip install numpy pytest
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -DTILEC_SANITIZE=${{ matrix.sanitize }}
+      - name: Build
+        run: ninja -C build
+      - name: Test (lit + e2e + fuzz)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
+      - name: Upload fuzz repros
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures-${{ matrix.name }}
+          path: tests/fuzz/failures/
+
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y clang-format-18
+      - run: clang-format-18 --dry-run --Werror include/tilec/*.h src/*.cpp tools/tilec/*.cpp
